@@ -18,7 +18,6 @@ final class RateLimit
                           ['limit' => 8,  'window' => 86400, 'block' => 86400]],
         'otp_verify'  => [['limit' => 5,  'window' => 900,   'block' => 86400]],
         'otp_resend'  => [['limit' => 3,  'window' => 3600,  'block' => 3600]],
-        'admin_login' => [['limit' => 5,  'window' => 900,   'block' => 900]],
         'qa_post'     => [['limit' => 5,  'window' => 86400, 'block' => 86400]],
         // Free-tier dictionary lookups: 10/day per IP, matches the product's
         // published free-tier cap — not a bot-abuse throttle, a pricing wall.

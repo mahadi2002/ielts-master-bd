@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS contact_messages (
   message       TEXT            NOT NULL,
   status        ENUM('new','read','resolved') NOT NULL DEFAULT 'new',
   ip_hash       CHAR(64)        DEFAULT NULL,
-  resolved_by   INT UNSIGNED    DEFAULT NULL COMMENT 'admins.id',
+  resolved_by   BIGINT UNSIGNED DEFAULT NULL COMMENT 'users.id of the role=admin account that resolved it',
   resolved_at   DATETIME        DEFAULT NULL,
   created_at    TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),

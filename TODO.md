@@ -30,8 +30,8 @@
 ## Before actually shipping this
 - Fresh `APP_KEY` / `HASH_PEPPER` on the real server, not the dev ones
   committed nowhere but generated locally.
-- Delete the seeded admin account and demo subscriber (`01611000000`)
-  before going live — or at minimum change the admin password immediately.
+- Delete both seeded demo accounts (`01811000000` admin, `01611000000`
+  subscriber) before going live, or run them through `/account/delete`.
 - Get real BDApps credentials, flip `BDAPPS_DRIVER` to `bdapps`, test one
   real charge before opening signups.
 - Nightly `mysqldump` + actually test a restore once, not just assume it
@@ -51,8 +51,9 @@
   ship the ngram parser, so it silently falls back to a `LIKE` prefix
   match. Fine at this catalog size; would want real fulltext if the word
   list grows into the thousands.
-- Admin TOTP 2FA — the `admins.totp_secret` column exists, nothing reads
-  it yet.
+- Admin 2FA — there's no second factor beyond the OTP itself right now;
+  worth adding a TOTP step specifically for `role = 'admin'` accounts given
+  what they can touch, on top of the phone-OTP everyone already gets.
 - SMS review reminders — needs its own BDApps SMS quota and costs money
   per message; punting until the daily-charge margin can absorb it.
 - The band-weighted exclusive-word selection (`ExclusiveWordService`)

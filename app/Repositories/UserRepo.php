@@ -10,7 +10,7 @@ use App\Support\Operators;
 final class UserRepo
 {
     private const COLUMNS = 'id, msisdn_hash, msisdn_last4, operator, display_name, target_band,
-                             daily_goal_type, daily_goal_count, status, locale, created_at,
+                             daily_goal_type, daily_goal_count, role, status, locale, created_at,
                              last_login_at, anonymized_at';
 
     public function find(int $id): ?array

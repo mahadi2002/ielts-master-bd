@@ -43,8 +43,8 @@ $links = [
     </nav>
     <?php if (!empty($admin)): ?>
       <div class="admin-sidebar__user">
-        <div><?= e($admin['name']) ?></div>
-        <form method="post" action="/admin/logout" data-guard>
+        <div class="lang-en">****<?= e($admin['msisdn_last4']) ?></div>
+        <form method="post" action="/logout" data-guard>
           <?= csrf_field() ?>
           <button type="submit" class="btn btn--ghost btn--sm">Logout</button>
         </form>

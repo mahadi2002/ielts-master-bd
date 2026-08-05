@@ -11,7 +11,7 @@
     <div class="answer-block mt-20">
       <span class="band-tag band-tag--exclusive">উত্তর</span>
       <p class="mt-8"><?= nl2br(e($question['answer'])) ?></p>
-      <p class="text-muted fs-xs mt-8">— <?= e($question['answered_by_name'] ?? 'Expert') ?>, <?= bn_date($question['answered_at']) ?></p>
+      <p class="text-muted fs-xs mt-8">— IELTS Master BD Team, <?= bn_date($question['answered_at']) ?></p>
     </div>
   <?php else: ?>
     <div class="empty-state mt-20">

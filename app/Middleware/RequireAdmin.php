@@ -3,12 +3,19 @@ declare(strict_types=1);
 
 namespace App\Middleware;
 
-use App\Core\Db;
 use App\Core\Request;
 use App\Core\Response;
 use App\Core\Session;
+use App\Core\View;
 use App\Exceptions\HttpException;
+use App\Repositories\UserRepo;
 
+/**
+ * Admin is a role on the same users table everyone else is in, not a
+ * separate identity — staff sign in through the exact same phone-OTP
+ * subscribe flow as any other user. This middleware only adds the role
+ * check on top of the ordinary logged-in state.
+ */
 final class RequireAdmin implements Middleware
 {
     public function handle(Request $request, callable $next): Response
@@ -18,18 +25,18 @@ final class RequireAdmin implements Middleware
             throw new HttpException(403);
         }
 
-        $adminId = Session::adminId();
-        if ($adminId === null) {
-            return Response::redirect('/admin/login');
+        $userId = Session::userId();
+        if ($userId === null) {
+            Session::notify('info', 'এই অংশ দেখতে আগে Login করুন।');
+            return Response::redirect('/subscribe?next=' . rawurlencode($request->path));
         }
 
-        $admin = Db::first('SELECT id, email, name, role, is_active FROM admins WHERE id = ?', [$adminId]);
-        if ($admin === null || (int) $admin['is_active'] !== 1) {
-            Session::forget('admin_id');
-            return Response::redirect('/admin/login');
+        $user = (new UserRepo())->find($userId);
+        if ($user === null || $user['status'] === 'blocked' || $user['role'] !== 'admin') {
+            throw new HttpException(403);
         }
 
-        \App\Core\View::share('admin', $admin);
+        View::share('admin', $user);
 
         return $next();
     }

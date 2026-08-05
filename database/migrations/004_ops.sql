@@ -1,9 +1,10 @@
 -- 004_ops.sql — sessions, security, queue, webhooks, admin alerts
 
+-- One session shape for everyone — admin is a users.role value, not a
+-- separate identity, so there is no admin_id column here.
 CREATE TABLE IF NOT EXISTS sessions (
   id            CHAR(64)        NOT NULL,
   user_id       BIGINT UNSIGNED DEFAULT NULL,
-  admin_id      INT UNSIGNED    DEFAULT NULL,
   ip_hash       CHAR(64)        DEFAULT NULL,
   ua_hash       CHAR(64)        DEFAULT NULL,
   payload       MEDIUMTEXT      NOT NULL,
@@ -11,7 +12,6 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at    INT UNSIGNED    NOT NULL,
   PRIMARY KEY (id),
   KEY idx_sess_user (user_id),
-  KEY idx_sess_admin (admin_id),
   KEY idx_sess_gc (last_activity)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

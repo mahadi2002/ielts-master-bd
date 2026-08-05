@@ -63,8 +63,9 @@ CREATE TABLE IF NOT EXISTS quiz_attempts (
   CONSTRAINT fk_attempt_quiz FOREIGN KEY (quiz_id) REFERENCES quizzes(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Ask-a-question UGC loop. Answers come from admins/editors, not other users —
--- this is moderated expert Q&A, not an open forum.
+-- Ask-a-question UGC loop. Answers come from a users.role = 'admin' account,
+-- not other users — this is moderated expert Q&A, not an open forum. Answers
+-- are attributed to "the team" in the UI, not a specific phone number.
 CREATE TABLE IF NOT EXISTS qa_questions (
   id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   user_id     BIGINT UNSIGNED NOT NULL,
@@ -73,7 +74,7 @@ CREATE TABLE IF NOT EXISTS qa_questions (
   body        TEXT            NOT NULL,
   status      ENUM('open','answered') NOT NULL DEFAULT 'open',
   answer      TEXT            DEFAULT NULL,
-  answered_by INT UNSIGNED    DEFAULT NULL,
+  answered_by BIGINT UNSIGNED DEFAULT NULL COMMENT 'users.id of the admin who answered',
   answered_at DATETIME        DEFAULT NULL,
   created_at  TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
@@ -81,5 +82,5 @@ CREATE TABLE IF NOT EXISTS qa_questions (
   KEY idx_qa_user (user_id),
   CONSTRAINT fk_qa_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   CONSTRAINT fk_qa_word FOREIGN KEY (word_id) REFERENCES words(id) ON DELETE SET NULL,
-  CONSTRAINT fk_qa_admin FOREIGN KEY (answered_by) REFERENCES admins(id) ON DELETE SET NULL
+  CONSTRAINT fk_qa_admin FOREIGN KEY (answered_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

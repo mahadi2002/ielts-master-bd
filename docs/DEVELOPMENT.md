@@ -33,10 +33,10 @@ code `123456` also always verifies. Charge simulation is deterministic by
 phone number suffix: a number ending in `00` fails soft (→ grace), `99`
 fails hard (→ stays unpaid), anything else succeeds.
 
-The seed data includes a demo subscriber (`01611000000`) already active, so
-`/login` can be exercised immediately, and a demo admin login (see the
-seed script's output for the generated password — change it before any
-shared deployment).
+The seed data includes two accounts, both already active so `/login` can be
+exercised immediately: a plain subscriber (`01611000000`, Airtel) and an
+admin (`01811000000`, Robi, `role = 'admin'`) — same OTP sign-in for both,
+the admin one just also gets `/admin`.
 
 ## Running cron manually
 

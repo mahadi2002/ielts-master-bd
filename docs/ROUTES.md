@@ -62,11 +62,14 @@ who hasn't been charged yet still needs a way out.
 |---|---|
 | `POST /webhooks/bdapps` | No CSRF (the caller is BDApps, not a browser) — authenticity comes from signature verification inside the gateway. Queues a job, never applies the state change inline. |
 
-## Admin (`admin` — separate email+password auth, optional IP allowlist)
+## Admin (`admin` — a `users.role = 'admin'` account, no separate login; optional IP allowlist)
+
+Signs in through the same `/subscribe` OTP flow as any subscriber — the
+`admin` middleware only adds a role check on top of the ordinary logged-in
+state. Signs out through the same `POST /logout` too.
 
 | Route | What it does |
 |---|---|
-| `GET/POST /admin/login`, `POST /admin/logout` | Staff auth |
 | `GET /admin` | Subscriber counts, charge totals, exclusive-pool alerts |
 | `/admin/words/*` | Word CRUD |
 | `/admin/guides/*` | Guide CRUD |

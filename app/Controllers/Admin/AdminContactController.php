@@ -55,7 +55,7 @@ final class AdminContactController extends Controller
             $this->notFound();
         }
 
-        $adminId = (int) Session::adminId();
+        $adminId = (int) $this->currentUserId();
         $repo->resolve((int) $id, $adminId);
 
         AuditService::log('admin.contact.resolved', 'admin', $adminId, 'contact', (int) $id, [], $request->ipHash());

@@ -5,12 +5,15 @@ plain numbered `.sql` files in `database/migrations/`, applied in order by
 `database/migrate.php`. There's no migration framework — each file is just
 `CREATE TABLE IF NOT EXISTS`, run once and tracked in a `migrations` table.
 
-## 001_identity.sql — users, billing, OTP, staff
+## 001_identity.sql — users, billing, OTP
 
 - **users** — `msisdn_hash` (HMAC blind index, the actual lookup key) and
   `msisdn_enc` (AES-256-GCM ciphertext) are separate columns for a reason —
   see SECURITY.md. `msisdn_last4` is the only part of the number ever
-  rendered in a template.
+  rendered in a template. `role` is `'user'` or `'admin'` — there is no
+  separate staff table; an admin is a subscriber whose account has this
+  flag set, and signs in through the identical `/subscribe` OTP flow.
+  Everyone gets in the same way.
 - **subscriptions** — one row per subscription attempt, never deleted or
   reused across a cancel-and-return cycle. `status` is the state machine:
   `pending → active ⇄ grace → expired`, or `→ unsubscribed` from anywhere.
@@ -19,9 +22,6 @@ plain numbered `.sql` files in `database/migrations/`, applied in order by
   actually stops a double charge if the hourly cron and a first-charge
   attempt on signup race each other, not application logic.
 - **otp_requests** — `otp_hash` is `password_hash()`, never plaintext.
-- **admins** — staff login, deliberately separate from `users`. Email +
-  password (ARGON2ID), not OTP — staff need reliable access that doesn't
-  depend on SMS delivery.
 
 ## 002_content.sql — the catalog
 
@@ -45,9 +45,10 @@ plain numbered `.sql` files in `database/migrations/`, applied in order by
   (cron) breaks a streak that's gone more than one day past its grace.
 - **user_collection** — the unlocked exclusive words, one row per unlock.
 - **quiz_attempts** — every attempt, correct or not, for accuracy stats.
-- **qa_questions** — the ask-a-question loop. Answers come from
-  `admins.id`, not other users — this is moderated expert Q&A, not an open
-  forum.
+- **qa_questions** — the ask-a-question loop. `answered_by` is the
+  `users.id` of whichever `role = 'admin'` account answered, but the UI
+  never shows who specifically — answers are attributed to "the team,"
+  not a phone number. This is moderated expert Q&A, not an open forum.
 
 ## 004_ops.sql — sessions, security, queue
 

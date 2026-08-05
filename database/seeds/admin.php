@@ -2,39 +2,31 @@
 declare(strict_types=1);
 
 /**
- * Seeds one admin/staff login and one demo subscriber so the app can be
+ * Seeds one admin account and one plain demo subscriber so the app can be
  * exercised immediately after a fresh install, without waiting on a real
- * BDApps OTP round-trip.
+ * BDApps OTP round-trip. Both sign in exactly the same way — /subscribe,
+ * OTP, done — the admin account differs only by its `role` column.
  *
- * Change both sets of credentials before any real deployment.
+ * Change both numbers (or at minimum re-run through /account/delete for
+ * the admin one) before any real deployment.
  */
 
 use App\Core\Crypto;
 use App\Core\Db;
 
-$adminEmail = 'admin@ieltsmasterbd.example';
-$exists = Db::value('SELECT id FROM admins WHERE email = ?', [$adminEmail]);
+function seedSubscriber(string $msisdn, string $operator, string $role): void
+{
+    $hash   = Crypto::blindIndex($msisdn);
+    $userId = Db::value('SELECT id FROM users WHERE msisdn_hash = ?', [$hash]);
 
-if ($exists === null) {
-    Db::insert(
-        'INSERT INTO admins (email, password_hash, name, role, is_active, created_at)
-         VALUES (?, ?, ?, "admin", 1, NOW())',
-        [$adminEmail, password_hash('ChangeMe!2026', PASSWORD_ARGON2ID), 'Admin']
-    );
-    out('  Admin login: ' . $adminEmail . ' / ChangeMe!2026 (change immediately)');
-}
+    if ($userId !== null) {
+        return;
+    }
 
-// A demo subscriber (01611000000, Airtel prefix) with an active subscription,
-// so /login can be exercised without going through OTP first.
-$demoMsisdn = '01611000000';
-$demoHash   = Crypto::blindIndex($demoMsisdn);
-$userId     = Db::value('SELECT id FROM users WHERE msisdn_hash = ?', [$demoHash]);
-
-if ($userId === null) {
     $userId = Db::insert(
-        'INSERT INTO users (msisdn_hash, msisdn_enc, msisdn_last4, operator, target_band, status, created_at)
-         VALUES (?, ?, ?, "airtel", 7.0, "active", NOW())',
-        [$demoHash, Crypto::encrypt($demoMsisdn), substr($demoMsisdn, -4)]
+        'INSERT INTO users (msisdn_hash, msisdn_enc, msisdn_last4, operator, target_band, role, status, created_at)
+         VALUES (?, ?, ?, ?, 7.0, ?, "active", NOW())',
+        [$hash, Crypto::encrypt($msisdn), substr($msisdn, -4), $operator, $role]
     );
 
     Db::insert(
@@ -49,5 +41,10 @@ if ($userId === null) {
         [$userId]
     );
 
-    out('  Demo subscriber: ' . $demoMsisdn . ' (dev OTP 123456, or use the mock-flow debug code shown on screen)');
+    out('  ' . ucfirst($role) . ' account: ' . $msisdn . ' (dev OTP 123456, or the code shown on screen in APP_DEBUG mode)');
 }
+
+// Robi (018) — admin. Airtel (016) — a plain subscriber. Different prefixes
+// so the two are easy to tell apart while testing.
+seedSubscriber('01811000000', 'robi', 'admin');
+seedSubscriber('01611000000', 'airtel', 'user');

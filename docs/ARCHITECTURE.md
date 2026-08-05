@@ -31,8 +31,8 @@ simpler to read than wiring everything through a container.
 
 ```
 Controllers/    thin — pull input, call a service or repo, pick a view
-Controllers/Admin/  separate admin auth, CRUD for every content type, the
-                contact inbox, the audit-log viewer
+Controllers/Admin/  CRUD for every content type, the contact inbox, the
+                audit-log viewer — gated by role, not a separate login
 Services/       the actual business logic (billing state machine, OTP
                 flow, spaced repetition scheduling, exclusive-word
                 selection, calendar aggregation)

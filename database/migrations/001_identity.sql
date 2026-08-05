@@ -1,4 +1,8 @@
--- 001_identity.sql — users, subscriptions, billing, OTP, admins
+-- 001_identity.sql — users, subscriptions, billing, OTP
+--
+-- No separate admin table: staff sign in the same OTP way as everyone else,
+-- distinguished only by role. Access to the service — for anyone, including
+-- staff — always goes through the same subscribe/OTP flow.
 
 CREATE TABLE IF NOT EXISTS users (
   id                 BIGINT UNSIGNED  NOT NULL AUTO_INCREMENT,
@@ -10,6 +14,7 @@ CREATE TABLE IF NOT EXISTS users (
   target_band        DECIMAL(2,1)     DEFAULT NULL COMMENT 'e.g. 7.0',
   daily_goal_type    ENUM('words','quiz_questions') NOT NULL DEFAULT 'words',
   daily_goal_count   SMALLINT UNSIGNED NOT NULL DEFAULT 5,
+  role               ENUM('user','admin') NOT NULL DEFAULT 'user',
   status             ENUM('pending','active','blocked') NOT NULL DEFAULT 'pending',
   locale             CHAR(2)          NOT NULL DEFAULT 'bn',
   created_at         TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -18,7 +23,8 @@ CREATE TABLE IF NOT EXISTS users (
   PRIMARY KEY (id),
   UNIQUE KEY uq_users_msisdn (msisdn_hash),
   KEY idx_users_status (status),
-  KEY idx_users_operator (operator)
+  KEY idx_users_operator (operator),
+  KEY idx_users_role (role)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS subscriptions (
@@ -77,18 +83,4 @@ CREATE TABLE IF NOT EXISTS otp_requests (
   PRIMARY KEY (id),
   KEY idx_otp_lookup (msisdn_hash, consumed_at, expires_at),
   KEY idx_otp_expiry (expires_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE IF NOT EXISTS admins (
-  id            INT UNSIGNED  NOT NULL AUTO_INCREMENT,
-  email         VARCHAR(160)  NOT NULL,
-  password_hash VARCHAR(255)  NOT NULL COMMENT 'PASSWORD_ARGON2ID',
-  name          VARCHAR(80)   NOT NULL,
-  role          ENUM('admin','editor') NOT NULL DEFAULT 'editor',
-  totp_secret   VARBINARY(255) DEFAULT NULL,
-  is_active     TINYINT(1)    NOT NULL DEFAULT 1,
-  last_login_at DATETIME      DEFAULT NULL,
-  created_at    TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (id),
-  UNIQUE KEY uq_admin_email (email)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

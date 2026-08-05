@@ -43,14 +43,9 @@ final class AdminQaController extends Controller
             return $this->redirect('/admin/qa/' . $id);
         }
 
-        $this->repo->answer((int) $id, (int) $this->currentAdminId(), (string) $validator->get('answer'));
+        $this->repo->answer((int) $id, (int) $this->currentUserId(), (string) $validator->get('answer'));
 
         Session::notify('success', 'উত্তর দেওয়া হয়েছে।');
         return $this->redirect('/admin/qa');
-    }
-
-    private function currentAdminId(): int
-    {
-        return (int) \App\Core\Session::adminId();
     }
 }

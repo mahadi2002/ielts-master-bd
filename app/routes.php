@@ -71,10 +71,8 @@ return [
     // ── Webhooks (no CSRF — signature + IP allowlist instead) ───────────
     ['POST', '/webhooks/bdapps',     'WebhookController@bdapps',          []],
 
-    // ── Admin ───────────────────────────────────────────────────────────
-    ['GET',  '/admin/login',         'Admin/AdminAuthController@form',    []],
-    ['POST', '/admin/login',         'Admin/AdminAuthController@login',   ['csrf', 'rl:admin_login']],
-    ['POST', '/admin/logout',        'Admin/AdminAuthController@logout',  ['admin', 'csrf']],
+    // ── Admin (no separate login — a users.role='admin' account signs in
+    //    through the same /subscribe OTP flow as everyone else) ───────────
     ['GET',  '/admin',               'Admin/AdminDashboardController@index', ['admin']],
     ['GET',  '/admin/logs',          'Admin/AdminDashboardController@logs',  ['admin']],
 

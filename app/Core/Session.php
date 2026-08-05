@@ -88,12 +88,6 @@ final class Session implements SessionHandlerInterface
         return $id === null ? null : (int) $id;
     }
 
-    public static function adminId(): ?int
-    {
-        $id = $_SESSION['admin_id'] ?? null;
-        return $id === null ? null : (int) $id;
-    }
-
     public static function regenerate(): void
     {
         if (self::$started) {
@@ -168,22 +162,19 @@ final class Session implements SessionHandlerInterface
 
     public function write(string $id, string $data): bool
     {
-        $now     = time();
-        $userId  = isset($_SESSION['user_id']) ? (int) $_SESSION['user_id'] : null;
-        $adminId = isset($_SESSION['admin_id']) ? (int) $_SESSION['admin_id'] : null;
+        $now    = time();
+        $userId = isset($_SESSION['user_id']) ? (int) $_SESSION['user_id'] : null;
 
         Db::exec(
-            'INSERT INTO sessions (id, user_id, admin_id, ip_hash, ua_hash, payload, last_activity, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            'INSERT INTO sessions (id, user_id, ip_hash, ua_hash, payload, last_activity, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE
                 user_id = VALUES(user_id),
-                admin_id = VALUES(admin_id),
                 payload = VALUES(payload),
                 last_activity = VALUES(last_activity)',
             [
                 $id,
                 $userId,
-                $adminId,
                 $_SESSION['_ip'] ?? null,
                 $_SESSION['_ua'] ?? null,
                 $data,

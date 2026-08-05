@@ -10,11 +10,12 @@ final class QuestionRepo
 {
     public function find(int $id): ?array
     {
+        // No join to whoever answered — answers are attributed to "the team"
+        // in the UI, not a specific staff phone number.
         return Db::first(
-            'SELECT q.*, w.headword, w.slug AS word_slug, a.name AS answered_by_name
+            'SELECT q.*, w.headword, w.slug AS word_slug
                FROM qa_questions q
                LEFT JOIN words w ON w.id = q.word_id
-               LEFT JOIN admins a ON a.id = q.answered_by
               WHERE q.id = ?',
             [$id]
         );
