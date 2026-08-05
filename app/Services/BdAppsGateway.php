@@ -1,40 +1,54 @@
 <?php
-
 declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Exceptions\GatewayException;
+
 /**
- * Stub. Real BDApps SDP/OTP charge endpoints, params, and callback signature
- * are a known blocker (see 01-BUILD-SPEC.md §9.1) — do not hardcode guessed
- * endpoints here. Wire this up once BDApps dashboard access is available.
+ * Production driver. Stubbed: the real BDApps SDP/OTP API contract (endpoints,
+ * request/response shapes, callback signature format) has not been received
+ * yet — see docs/FEATURES.md for the open item. Every method throws until
+ * the real integration is wired in; bootstrap.php refuses to boot this driver
+ * in production, and GatewayFactory refuses it in production too, so there is
+ * no path for this stub to run against real users.
  */
 final class BdAppsGateway implements SubscriptionGateway
 {
-    public function __construct(private array $config)
+    public function sendOtp(string $msisdn): array
     {
+        throw new GatewayException('BdAppsGateway::sendOtp is not implemented — BDApps API contract not received.');
     }
 
-    public function subscribe(string $mobileNumber, float $dailyAmount): array
+    public function verifyOtp(string $ref, string $code, string $msisdn): array
     {
-        throw new \RuntimeException(
-            'BdAppsGateway is not implemented yet — BDApps API contract not received. ' .
-            'Set SUBSCRIPTION_GATEWAY=mock in .env until then.'
+        throw new GatewayException('BdAppsGateway::verifyOtp is not implemented — BDApps API contract not received.');
+    }
+
+    public function charge(string $subscriberRef, string $idempotencyKey, float $amount): array
+    {
+        throw new GatewayException('BdAppsGateway::charge is not implemented — BDApps API contract not received.');
+    }
+
+    public function status(string $subscriberRef): array
+    {
+        throw new GatewayException('BdAppsGateway::status is not implemented — BDApps API contract not received.');
+    }
+
+    public function unsubscribe(string $subscriberRef): bool
+    {
+        throw new GatewayException('BdAppsGateway::unsubscribe is not implemented — BDApps API contract not received.');
+    }
+
+    public function verifyWebhook(string $rawBody, array $headers): bool
+    {
+        $secret = (string) config('bdapps.webhook.secret', '');
+        if ($secret === '') {
+            return false; // production must have a real secret configured
+        }
+        return hash_equals(
+            hash_hmac('sha256', $rawBody, $secret),
+            (string) ($headers['x-signature'] ?? '')
         );
-    }
-
-    public function checkStatus(string $externalRef): array
-    {
-        throw new \RuntimeException('BdAppsGateway::checkStatus not implemented — see BDApps blocker.');
-    }
-
-    public function cancel(string $externalRef): bool
-    {
-        throw new \RuntimeException('BdAppsGateway::cancel not implemented — see BDApps blocker.');
-    }
-
-    public function name(): string
-    {
-        return 'bdapps';
     }
 }

@@ -1,43 +1,38 @@
 <?php
-
 declare(strict_types=1);
 
 namespace App\Controllers;
 
+use App\Core\Controller;
 use App\Core\Request;
 use App\Core\Response;
-use App\Core\Session;
-use App\Core\View;
-use App\Models\DailyProgress;
-use App\Models\QuizAttempt;
-use App\Models\Streak;
-use App\Models\UserCollection;
-use App\Models\UserWordProgress;
+use App\Repositories\CollectionRepo;
+use App\Repositories\DailyProgressRepo;
+use App\Repositories\ProgressRepo;
+use App\Repositories\QuizAttemptRepo;
+use App\Repositories\StreakRepo;
+use App\Repositories\UserRepo;
 
-final class DashboardController
+final class DashboardController extends Controller
 {
-    public function index(Request $request): void
+    public function index(Request $request): Response
     {
-        $userId = (string) Session::userId();
+        $userId = (int) $this->currentUserId();
+        $user   = (new UserRepo())->find($userId);
+        $target = (int) ($user['daily_goal_count'] ?? 5);
 
-        $statusCounts = UserWordProgress::countByStatus($userId);
-        $weakWords = UserWordProgress::weakWords($userId, 8);
-        $weeklyActivity = UserWordProgress::learnedInLastDays($userId, 7);
-        $streak = Streak::forUser($userId);
-        $todayProgress = DailyProgress::today($userId);
-        $collectionCount = UserCollection::count($userId);
-        $accuracy = QuizAttempt::accuracyForUser($userId);
-        $completedThisWeek = DailyProgress::countCompletedInLastDays($userId, 7);
+        $progressRepo = new ProgressRepo();
 
-        Response::html(View::render('dashboard/index', [
-            'statusCounts' => $statusCounts,
-            'weakWords' => $weakWords,
-            'weeklyActivity' => $weeklyActivity,
-            'streak' => $streak,
-            'todayProgress' => $todayProgress,
-            'collectionCount' => $collectionCount,
-            'accuracy' => $accuracy,
-            'completedThisWeek' => $completedThisWeek,
-        ]));
+        return $this->view('app/dashboard', [
+            'title'             => 'Dashboard',
+            'statusCounts'      => $progressRepo->countByStatus($userId),
+            'weakWords'         => $progressRepo->weakWords($userId, 8),
+            'weeklyActivity'    => $progressRepo->activityByDay($userId, 7),
+            'streak'            => (new StreakRepo())->forUser($userId),
+            'todayProgress'     => (new DailyProgressRepo())->today($userId, $target),
+            'collectionCount'   => (new CollectionRepo())->count($userId),
+            'accuracy'          => (new QuizAttemptRepo())->accuracyForUser($userId),
+            'completedThisWeek' => (new DailyProgressRepo())->countCompletedInLastDays($userId, 7),
+        ]);
     }
 }

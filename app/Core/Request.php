@@ -1,40 +1,63 @@
 <?php
-
 declare(strict_types=1);
 
 namespace App\Core;
 
 final class Request
 {
-    public readonly string $method;
-    public readonly string $path;
-    private array $query;
-    private array $body;
-    private array $params = [];
+    private function __construct(
+        public readonly string $method,
+        public readonly string $path,
+        public readonly array $query,
+        public readonly array $body,
+        public readonly array $files,
+        public readonly array $headers,
+    ) {
+    }
 
-    public function __construct()
+    public static function capture(): self
     {
-        $this->method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
-        $uri = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
-        $this->path = $uri === '' ? '/' : (rtrim($uri, '/') ?: '/');
-        $this->query = $_GET;
+        $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
 
-        if (str_contains($_SERVER['CONTENT_TYPE'] ?? '', 'application/json')) {
-            $raw = file_get_contents('php://input');
-            $this->body = $raw ? (json_decode($raw, true) ?? []) : [];
-        } else {
-            $this->body = $_POST;
+        if ($method === 'POST' && isset($_POST['_method'])) {
+            $spoof = strtoupper((string) $_POST['_method']);
+            if (in_array($spoof, ['PUT', 'PATCH', 'DELETE'], true)) {
+                $method = $spoof;
+            }
         }
+
+        $path = parse_url((string) ($_SERVER['REQUEST_URI'] ?? '/'), PHP_URL_PATH) ?: '/';
+        $path = '/' . trim(rawurldecode($path), '/');
+
+        return new self(
+            $method,
+            $path === '//' ? '/' : $path,
+            $_GET,
+            $_POST,
+            $_FILES,
+            self::readHeaders(),
+        );
     }
 
-    public function setParams(array $params): void
+    private static function readHeaders(): array
     {
-        $this->params = $params;
+        $out = [];
+        foreach ($_SERVER as $k => $v) {
+            if (str_starts_with($k, 'HTTP_')) {
+                $out[strtolower(str_replace('_', '-', substr($k, 5)))] = (string) $v;
+            }
+        }
+        foreach (['CONTENT_TYPE' => 'content-type', 'CONTENT_LENGTH' => 'content-length'] as $k => $n) {
+            if (isset($_SERVER[$k])) {
+                $out[$n] = (string) $_SERVER[$k];
+            }
+        }
+        return $out;
     }
 
-    public function param(string $key, mixed $default = null): mixed
+    public function header(string $name, ?string $default = null): ?string
     {
-        return $this->params[$key] ?? $default;
+        return $this->headers[strtolower($name)] ?? $default;
     }
 
     public function input(string $key, mixed $default = null): mixed
@@ -42,14 +65,40 @@ final class Request
         return $this->body[$key] ?? $this->query[$key] ?? $default;
     }
 
-    public function all(): array
+    public function str(string $key, string $default = ''): string
     {
-        return array_merge($this->query, $this->body);
+        $v = $this->input($key, $default);
+        return is_scalar($v) ? trim((string) $v) : $default;
     }
 
-    public function query(string $key, mixed $default = null): mixed
+    public function int(string $key, int $default = 0): int
     {
-        return $this->query[$key] ?? $default;
+        $v = $this->input($key);
+        return is_numeric($v) ? (int) $v : $default;
+    }
+
+    /** @return string[] */
+    public function arr(string $key): array
+    {
+        $v = $this->input($key, []);
+        if (!is_array($v)) {
+            return [];
+        }
+        return array_values(array_filter(array_map(
+            static fn($x) => is_scalar($x) ? (string) $x : null,
+            $v
+        )));
+    }
+
+    public function rawBody(): string
+    {
+        return (string) file_get_contents('php://input');
+    }
+
+    public function json(): array
+    {
+        $decoded = json_decode($this->rawBody(), true);
+        return is_array($decoded) ? $decoded : [];
     }
 
     public function isPost(): bool
@@ -57,20 +106,45 @@ final class Request
         return $this->method === 'POST';
     }
 
+    /**
+     * Client IP. Only trusts X-Forwarded-For when the immediate peer is in
+     * TRUSTED_PROXIES — otherwise the header is trivially spoofed and would
+     * defeat every IP-keyed rate limit.
+     */
     public function ip(): string
     {
-        return $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+        $remote  = (string) ($_SERVER['REMOTE_ADDR'] ?? '0.0.0.0');
+        $trusted = array_values(array_filter(array_map('trim', explode(',', (string) env('TRUSTED_PROXIES', '')))));
+
+        if ($trusted && in_array($remote, $trusted, true)) {
+            $fwd = $this->header('x-forwarded-for');
+            if ($fwd) {
+                $first = trim(explode(',', $fwd)[0]);
+                if (filter_var($first, FILTER_VALIDATE_IP)) {
+                    return $first;
+                }
+            }
+        }
+        return $remote;
     }
 
     public function userAgent(): string
     {
-        return substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 255);
+        return substr((string) $this->header('user-agent', ''), 0, 512);
+    }
+
+    public function ipHash(): string
+    {
+        return Crypto::blindIndex('ip:' . $this->ip());
+    }
+
+    public function uaHash(): string
+    {
+        return Crypto::blindIndex('ua:' . $this->userAgent());
     }
 
     public function wantsJson(): bool
     {
-        return str_contains($_SERVER['HTTP_ACCEPT'] ?? '', 'application/json')
-            || str_contains($_SERVER['CONTENT_TYPE'] ?? '', 'application/json')
-            || str_contains($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '', 'XMLHttpRequest');
+        return str_contains((string) $this->header('accept', ''), 'application/json');
     }
 }

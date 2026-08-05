@@ -1,87 +1,127 @@
 <?php
-
 declare(strict_types=1);
 
-define('BASE_PATH', dirname(__DIR__));
+/**
+ * Single entry point for every execution context: the web front controller,
+ * the CLI cron scripts, and database/migrate.php.
+ *
+ * APP_ROOT must be defined by the caller before this file is required.
+ */
 
-// ---- Minimal .env loader (no Composer) ----
-$envFile = BASE_PATH . '/.env';
-if (is_file($envFile)) {
-    foreach (file($envFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
-        $line = trim($line);
-        if ($line === '' || str_starts_with($line, '#')) {
-            continue;
-        }
-        if (!str_contains($line, '=')) {
-            continue;
-        }
-        [$key, $value] = explode('=', $line, 2);
-        $key = trim($key);
-        $value = trim($value);
-
-        if ($value !== '' && ($value[0] === '"' || $value[0] === "'")) {
-            $quote = $value[0];
-            $end = strpos($value, $quote, 1);
-            $value = $end !== false ? substr($value, 1, $end - 1) : trim($value, $quote);
-        } elseif (($hashPos = strpos($value, '#')) !== false) {
-            $value = rtrim(substr($value, 0, $hashPos));
-        }
-
-        $_ENV[$key] = $value;
-        putenv("$key=$value");
-    }
+if (!defined('APP_ROOT')) {
+    throw new RuntimeException('APP_ROOT must be defined before bootstrap.php.');
 }
 
-$config = require BASE_PATH . '/config.php';
+// ── Autoloader (PSR-4: App\ → app/) ─────────────────────────────────────
+spl_autoload_register(static function (string $class): void {
+    if (!str_starts_with($class, 'App\\')) {
+        return;
+    }
+    $path = APP_ROOT . '/app/' . str_replace('\\', '/', substr($class, 4)) . '.php';
+    if (is_file($path)) {
+        require_once $path;
+    }
+});
 
-// ---- Error handling ----
-error_reporting(E_ALL);
-ini_set('display_errors', $config['app']['debug'] ? '1' : '0');
+require_once APP_ROOT . '/app/Core/Env.php';
+require_once APP_ROOT . '/app/Core/Helpers.php';
+
+// ── Environment ─────────────────────────────────────────────────────────
+App\Core\Env::load(APP_ROOT . '/.env');
+
+date_default_timezone_set((string) config('app.timezone', 'Asia/Dhaka'));
+mb_internal_encoding('UTF-8');
+
+$isDebug = (bool) config('app.debug');
+$env     = (string) config('app.env', 'production');
+
+ini_set('display_errors', $isDebug && PHP_SAPI === 'cli' ? '1' : '0');
 ini_set('log_errors', '1');
-ini_set('error_log', BASE_PATH . '/storage/logs/php-error.log');
+error_reporting(E_ALL);
 
-set_exception_handler(function (Throwable $e) use ($config) {
-    error_log('[Uncaught] ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine());
+// ── Startup guards — fail loud here rather than silently misbehave later ─
+$fatal = static function (string $message): never {
     if (PHP_SAPI === 'cli') {
-        fwrite(STDERR, (string) $e . "\n");
+        fwrite(STDERR, 'FATAL: ' . $message . PHP_EOL);
         exit(1);
     }
     http_response_code(500);
-    if ($config['app']['debug']) {
-        echo '<pre style="padding:2rem;font-family:monospace;white-space:pre-wrap;">';
-        echo htmlspecialchars((string) $e, ENT_QUOTES, 'UTF-8');
-        echo '</pre>';
-    } else {
-        echo 'একটি সমস্যা হয়েছে। কিছুক্ষণ পর আবার চেষ্টা করুন।';
-    }
-});
+    header('Content-Type: text/plain; charset=utf-8');
+    echo 'Configuration error. See storage/logs.';
+    error_log('[bootstrap] ' . $message);
+    exit(1);
+};
 
-// ---- Autoload (PSR-4-ish, zero Composer) ----
-spl_autoload_register(function (string $class) {
-    $prefix = 'App\\';
-    if (!str_starts_with($class, $prefix)) {
-        return;
-    }
-    $relative = substr($class, strlen($prefix));
-    $path = BASE_PATH . '/app/' . str_replace('\\', '/', $relative) . '.php';
-    if (is_file($path)) {
-        require $path;
-    }
-});
-
-require_once BASE_PATH . '/app/helpers.php';
-
-// ---- Timezone ----
-date_default_timezone_set('Asia/Dhaka');
-
-// ---- Database ----
-App\Core\Db::connect($config);
-
-// ---- Session (DB-backed) + views: HTTP requests only, not cron/CLI ----
-if (PHP_SAPI !== 'cli') {
-    App\Core\Session::start($config);
-    App\Core\View::boot($config);
-    App\Core\Csrf::boot($config);
+if (!App\Core\Env::has('APP_KEY') || !App\Core\Env::has('HASH_PEPPER')) {
+    $fatal('APP_KEY and HASH_PEPPER must be set in .env. Generate with: php -r "echo base64_encode(random_bytes(32)), PHP_EOL;"');
 }
 
-return $config;
+if (strlen((string) config('app.key')) !== 32 || strlen((string) config('app.pepper')) !== 32) {
+    $fatal('APP_KEY and HASH_PEPPER must each decode to exactly 32 bytes of base64.');
+}
+
+if ($env === 'production') {
+    if ($isDebug) {
+        $fatal('APP_DEBUG must be false when APP_ENV=production.');
+    }
+    if (config('bdapps.driver') === 'mock') {
+        $fatal('BDAPPS_DRIVER=mock is blocked when APP_ENV=production.');
+    }
+}
+
+// ── Storage directories ────────────────────────────────────────────────
+foreach (['logs', 'cache', 'backups'] as $dir) {
+    $path = APP_ROOT . '/storage/' . $dir;
+    if (!is_dir($path)) {
+        @mkdir($path, 0750, true);
+    }
+}
+
+// ── Database (skip for HTTP requests; index.php connects lazily via Db::pdo()) ──
+// bootstrap.php itself never opens the connection — Db is a lazy singleton.
+
+// ── Error handling ─────────────────────────────────────────────────────
+set_error_handler(static function (int $severity, string $message, string $file, int $line): bool {
+    if (!(error_reporting() & $severity)) {
+        return false;
+    }
+    throw new ErrorException($message, 0, $severity, $file, $line);
+});
+
+set_exception_handler(static function (Throwable $e): void {
+    App\Core\Logger::exception($e);
+
+    if (PHP_SAPI === 'cli') {
+        fwrite(STDERR, get_class($e) . ': ' . $e->getMessage() . PHP_EOL . $e->getTraceAsString() . PHP_EOL);
+        exit(1);
+    }
+
+    if (!headers_sent()) {
+        http_response_code(500);
+        header('Content-Type: text/html; charset=UTF-8');
+    }
+
+    if (config('app.debug')) {
+        echo '<pre>' . e(get_class($e) . ': ' . $e->getMessage() . "\n\n" . $e->getTraceAsString()) . '</pre>';
+        return;
+    }
+
+    try {
+        echo App\Core\View::render('errors/500');
+    } catch (Throwable) {
+        echo 'সাময়িক সমস্যা হচ্ছে। একটু পরে আবার চেষ্টা করুন।';
+    }
+});
+
+register_shutdown_function(static function (): void {
+    $err = error_get_last();
+    if ($err !== null && in_array($err['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR], true)) {
+        App\Core\Logger::error('Fatal: ' . $err['message'], ['file' => $err['file'] . ':' . $err['line']]);
+    }
+});
+
+// ── Values every view can rely on ──────────────────────────────────────
+App\Core\View::share('appName', (string) config('app.name'));
+App\Core\View::share('dailyAmount', number_format((float) config('bdapps.amount', 2.78), 2));
+App\Core\View::share('shortcode', (string) config('bdapps.sms.shortcode'));
+App\Core\View::share('operatorNote', (string) config('operators.display_note'));

@@ -20,9 +20,9 @@
 
   function render() {
     if (index >= quizzes.length) {
-      stage.style.display = 'none';
+      stage.classList.add('is-hidden');
       if (doneState) {
-        doneState.style.display = 'block';
+        doneState.classList.remove('is-hidden');
         if (elScore) elScore.textContent = correctCount + ' / ' + quizzes.length;
       }
       return;
@@ -30,8 +30,8 @@
 
     answered = false;
     var q = quizzes[index];
-    elResultBanner.style.display = 'none';
-    elNextBtn.style.display = 'none';
+    elResultBanner.classList.add('is-hidden');
+    elNextBtn.classList.add('is-hidden');
     elQuestion.textContent = q.question;
 
     var pct = (index / quizzes.length) * 100;
@@ -53,7 +53,7 @@
     } else {
       var form = document.createElement('form');
       form.className = 'input-group';
-      form.innerHTML = '<input type="text" id="js-fill-blank-input" placeholder="উত্তর লিখুন" autocomplete="off">' +
+      form.innerHTML = '<input type="text" class="input" id="js-fill-blank-input" placeholder="উত্তর লিখুন" autocomplete="off">' +
         '<button type="submit" class="btn btn--primary">Submit</button>';
       form.addEventListener('submit', function (e) {
         e.preventDefault();
@@ -68,9 +68,9 @@
     if (answered) return;
     answered = true;
 
-    window.IMBD.post('/quiz/submit', { quiz_id: quiz.id, answer: answer }).then(function (res) {
+    window.IMBD.post('/app/quiz/submit', { quiz_id: quiz.id, answer: answer }).then(function (res) {
       if (!res.ok) {
-        window.IMBD.toast(res.data.error || 'একটি সমস্যা হয়েছে।');
+        window.IMBD.toast((res.data && res.data.error) || 'একটি সমস্যা হয়েছে।');
         answered = false;
         return;
       }
@@ -82,7 +82,7 @@
         else if (el === btnEl) el.classList.add('is-incorrect');
       });
 
-      elResultBanner.style.display = 'block';
+      elResultBanner.classList.remove('is-hidden');
       elResultBanner.className = 'quiz-result-banner ' + (correct ? 'quiz-result-banner--correct' : 'quiz-result-banner--incorrect');
       elResultBanner.textContent = correct ? 'সঠিক উত্তর! ✅' : ('ভুল উত্তর। সঠিক উত্তর: ' + res.data.correctAnswer);
 
@@ -91,7 +91,7 @@
         if (res.data.unlockedWord) window.IMBD.showUnlockModal(res.data.unlockedWord);
       }
 
-      elNextBtn.style.display = 'inline-flex';
+      elNextBtn.classList.remove('is-hidden');
     });
   }
 

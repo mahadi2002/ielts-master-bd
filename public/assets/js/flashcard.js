@@ -5,8 +5,6 @@
   if (!stage) return;
 
   var wordsData = JSON.parse(stage.dataset.words || '[]');
-  var goalTarget = parseInt(stage.dataset.goalTarget || '5', 10);
-  var goalAchieved = parseInt(stage.dataset.goalAchieved || '0', 10);
   var index = 0;
 
   var card = document.getElementById('js-flashcard');
@@ -24,8 +22,8 @@
 
   function render() {
     if (index >= wordsData.length) {
-      stage.style.display = 'none';
-      if (doneState) doneState.style.display = 'block';
+      stage.classList.add('is-hidden');
+      if (doneState) doneState.classList.remove('is-hidden');
       return;
     }
     var w = wordsData[index];
@@ -44,18 +42,16 @@
   });
 
   function mark(wordId) {
-    window.IMBD.post('/learn/mark', { word_id: wordId }).then(function (res) {
+    window.IMBD.post('/app/learn/mark', { word_id: wordId }).then(function (res) {
       if (!res.ok) {
-        window.IMBD.toast(res.data.error || 'একটি সমস্যা হয়েছে।');
+        window.IMBD.toast((res.data && res.data.error) || 'একটি সমস্যা হয়েছে।');
         return;
       }
-      goalAchieved = res.data.progress.achieved;
-      if (ring) window.IMBD.pulseRing(ring, goalAchieved);
+      var achieved = res.data.progress.achieved;
+      if (ring) window.IMBD.pulseRing(ring, achieved);
       if (res.data.justCompleted) {
         window.IMBD.toast('আজকের লক্ষ্য পূর্ণ হয়েছে! 🎉');
-        if (res.data.unlockedWord) {
-          window.IMBD.showUnlockModal(res.data.unlockedWord);
-        }
+        if (res.data.unlockedWord) window.IMBD.showUnlockModal(res.data.unlockedWord);
       }
       index++;
       render();
@@ -76,7 +72,6 @@
     });
   }
 
-  // ---- Basic swipe support ----
   var startX = null;
   stage.addEventListener('touchstart', function (e) { startX = e.touches[0].clientX; }, { passive: true });
   stage.addEventListener('touchend', function (e) {

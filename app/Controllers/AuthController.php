@@ -1,200 +1,297 @@
 <?php
-
 declare(strict_types=1);
 
 namespace App\Controllers;
 
-use App\Core\Crypto;
-use App\Core\Db;
+use App\Core\Controller;
 use App\Core\Request;
 use App\Core\Response;
 use App\Core\Session;
 use App\Core\Validator;
-use App\Core\View;
-use App\Models\Subscription;
-use App\Models\User;
-use App\Services\BdAppsGateway;
-use App\Services\MockGateway;
-use App\Services\SubscriptionGateway;
+use App\Exceptions\GatewayException;
+use App\Exceptions\OtpException;
+use App\Repositories\SubscriptionRepo;
+use App\Repositories\UserRepo;
+use App\Services\AuditService;
+use App\Services\OtpService;
+use App\Services\SubscriptionService;
+use App\Support\Operators;
 
-final class AuthController
+/**
+ * The subscribe funnel. Every OTP failure case gets its own exact Bangla
+ * message here — "wrong code" and "too many tries" read very differently
+ * to someone who's never used an OTP flow before.
+ */
+final class AuthController extends Controller
 {
-    private array $config;
+    private const PENDING_KEY = '_pending_msisdn';
+    private const STARTED_KEY = '_otp_form_started';
 
-    public function __construct()
+    public function phoneForm(Request $request): Response
     {
-        $this->config = require BASE_PATH . '/config.php';
+        return $this->renderPhoneForm($request, false);
     }
 
-    public function mobileEntry(Request $request): void
+    public function requestOtp(Request $request): Response
     {
-        if (Session::userId() && Subscription::activeFor((string) Session::userId())) {
-            Response::redirect('/dashboard');
-            return;
+        // Honeypot + minimum fill time — cheaper and kinder than a CAPTCHA.
+        if ($request->str('website') !== '') {
+            return $this->redirect('/subscribe');
         }
 
-        $mobile = (string) $request->query('mobile', '');
-
-        if ($mobile !== '') {
-            Response::html(View::render('auth/otp', [
-                'mobile' => $mobile,
-                'otpLength' => $this->config['otp']['length'],
-                'resendCooldown' => $this->config['otp']['resend_cooldown'],
-                'error' => authErrorMessage($request->query('error')),
-                'debugOtp' => $this->config['app']['debug'] ? $request->query('debug_otp') : null,
-            ]));
-            return;
+        $started = (int) Session::get(self::STARTED_KEY, 0);
+        if ($started > 0 && time() - $started < 2) {
+            Session::notify('error', 'একটু ধীরে চেষ্টা করুন।');
+            return $this->redirect('/subscribe');
         }
 
-        Response::html(View::render('auth/mobile-entry', [
-            'expired' => $request->query('expired') === '1',
-            'error' => authErrorMessage($request->query('error')),
-            'oldMobile' => (string) $request->query('old_mobile', ''),
-        ]));
+        $validator = Validator::make($request->body, ['msisdn' => 'required|msisdn'], ['msisdn' => 'মোবাইল নম্বর']);
+
+        if ($validator->fails()) {
+            $validator->flash();
+            return $this->redirect('/subscribe');
+        }
+
+        $msisdn = (string) Operators::normalize((string) $validator->get('msisdn'));
+
+        if (!Operators::isAllowed($msisdn)) {
+            Session::flash('_errors', ['msisdn' => ['এই Service এখন শুধু Robi ও Airtel Number-এ পাওয়া যাচ্ছে।']]);
+            Session::flash('_old', ['msisdn' => $msisdn]);
+            return $this->redirect('/subscribe');
+        }
+
+        return $this->sendOtp($msisdn, $request, false);
     }
 
-    public function sendOtp(Request $request): void
+    public function otpForm(Request $request): Response
     {
-        $mobile = trim((string) $request->input('mobile_number'));
-        $operator = Validator::operatorForMobile($mobile);
+        $msisdn = (string) Session::get(self::PENDING_KEY, '');
 
-        if ($operator === null) {
-            if ($request->wantsJson()) {
-                Response::json(['success' => false, 'error' => authErrorMessage('invalid_mobile')], 422);
-                return;
+        if ($msisdn === '') {
+            return $this->redirect('/subscribe');
+        }
+
+        return $this->view('auth/otp', [
+            'masked'     => Operators::mask($msisdn),
+            'resendWait' => OtpService::make()->resendWaitFor($msisdn),
+            'devOtp'     => config('app.debug') ? Session::flashGet('_dev_otp') : null,
+            'next'       => $this->safeNext((string) Session::get('_next', '')),
+        ]);
+    }
+
+    public function verifyOtp(Request $request): Response
+    {
+        $msisdn = (string) Session::get(self::PENDING_KEY, '');
+
+        if ($msisdn === '') {
+            return $this->redirect('/subscribe');
+        }
+
+        $validator = Validator::make($request->body, ['code' => 'required|digits:6'], ['code' => 'OTP Code']);
+
+        if ($validator->fails()) {
+            $validator->flash();
+            return $this->redirect('/subscribe/verify');
+        }
+
+        try {
+            $subscriberRef = OtpService::make()->verify($msisdn, (string) $validator->get('code'), $request);
+        } catch (OtpException $e) {
+            Session::flash('_errors', ['code' => [$e->getMessage()]]);
+
+            if ($e->reason === 'too_many' || $e->reason === 'expired' || $e->reason === 'missing') {
+                Session::forget(self::PENDING_KEY);
+                Session::notify('error', $e->getMessage());
+                return $this->redirect('/subscribe');
             }
-            Response::redirect('/subscribe?error=invalid_mobile&old_mobile=' . urlencode($mobile));
-            return;
+
+            return $this->redirect('/subscribe/verify');
+        } catch (GatewayException $e) {
+            \App\Core\Logger::warning('otp.verify.gateway_failed', ['error' => $e->getMessage()]);
+            Session::notify('error', 'এই মুহূর্তে যাচাই করা যাচ্ছে না। একটু পরে আবার চেষ্টা করুন।');
+            return $this->redirect('/subscribe/verify');
         }
 
-        $otp = Crypto::otp($this->config['otp']['length']);
-        $stmt = Db::pdo()->prepare(
-            'INSERT INTO otp_requests (id, mobile_number, otp_hash, attempts, expires_at, created_at)
-             VALUES (:id, :mobile, :hash, 0, :expires, NOW())'
+        return $this->completeSubscribe($msisdn, $subscriberRef, $request);
+    }
+
+    public function resendOtp(Request $request): Response
+    {
+        $msisdn = (string) Session::get(self::PENDING_KEY, '');
+
+        if ($msisdn === '') {
+            return $this->redirect('/subscribe');
+        }
+
+        $wait = OtpService::make()->resendWaitFor($msisdn);
+        if ($wait > 0) {
+            Session::notify('error', bn_num((int) config('app.otp.resend_cooldown', 60)) . ' সেকেন্ড পর আবার পাঠাতে পারবেন।');
+            return $this->redirect('/subscribe/verify');
+        }
+
+        return $this->sendOtp($msisdn, $request, true);
+    }
+
+    /**
+     * GET /login — same OTP mechanism as /subscribe (a returning subscriber's
+     * number is recognised and logged straight in — see completeSubscribe()),
+     * but framed as a login screen for people already paying who just want
+     * back in.
+     */
+    public function login(Request $request): Response
+    {
+        return $this->renderPhoneForm($request, true);
+    }
+
+    public function logout(Request $request): Response
+    {
+        $userId = Session::userId();
+
+        if ($userId !== null) {
+            AuditService::log('auth.logout', 'user', $userId, null, null, [], $request->ipHash());
+        }
+
+        Session::destroy_all();
+
+        return $this->redirect('/');
+    }
+
+    // ── internals ───────────────────────────────────────────────────────
+
+    private function renderPhoneForm(Request $request, bool $isLogin): Response
+    {
+        Session::put(self::STARTED_KEY, time());
+
+        return $this->view('auth/phone', [
+            'next'    => $this->safeNext($request->str('next')),
+            'isLogin' => $isLogin,
+        ]);
+    }
+
+    private function sendOtp(string $msisdn, Request $request, bool $isResend): Response
+    {
+        try {
+            OtpService::make()->send($msisdn, $request, $isResend);
+        } catch (OtpException $e) {
+            Session::flash('_errors', ['msisdn' => [$e->getMessage()]]);
+            Session::flash('_old', ['msisdn' => $msisdn]);
+            Session::notify('error', $e->getMessage());
+
+            return $this->redirect($isResend ? '/subscribe/verify' : '/subscribe');
+        } catch (GatewayException $e) {
+            \App\Core\Logger::warning('otp.send.gateway_failed', ['error' => $e->getMessage()]);
+            Session::notify('error', 'এই মুহূর্তে OTP পাঠানো যাচ্ছে না। একটু পরে আবার চেষ্টা করুন।');
+
+            return $this->redirect($isResend ? '/subscribe/verify' : '/subscribe')->withStatus(503);
+        }
+
+        Session::put(self::PENDING_KEY, $msisdn);
+        Session::put('_next', $this->safeNext($request->str('next')));
+
+        return $this->redirect('/subscribe/verify');
+    }
+
+    /**
+     * OTP verified. Create-or-reuse the user, open a pending subscription and
+     * attempt the first charge immediately — the user is watching the screen,
+     * so waiting an hour for cron would be a terrible first impression.
+     */
+    private function completeSubscribe(string $msisdn, string $subscriberRef, Request $request): Response
+    {
+        $userRepo = new UserRepo();
+        $user     = $userRepo->findOrCreate($msisdn);
+        $userId   = (int) $user['id'];
+
+        if ($user['status'] === 'blocked') {
+            Session::forget(self::PENDING_KEY);
+            Session::notify('error', 'এই নম্বর দিয়ে এখন Login করা যাচ্ছে না। যোগাযোগ করুন।');
+            return $this->redirect('/contact');
+        }
+
+        $service = new SubscriptionService();
+        $subRepo = new SubscriptionRepo();
+
+        // Session fixation: rotate the id the moment the identity changes.
+        Session::regenerate();
+        Session::put('user_id', $userId);
+        Session::put('_ua', $request->uaHash());
+        Session::forget(self::PENDING_KEY);
+        Session::forget(self::STARTED_KEY);
+
+        $userRepo->touchLogin($userId);
+
+        AuditService::log('auth.otp_verified', 'user', $userId, 'user', $userId, [
+            'msisdn_last4' => Operators::last4($msisdn),
+        ], $request->ipHash(), $request->uaHash());
+
+        // Already an active subscriber — just let them in.
+        if (SubscriptionService::hasAccess($userId)) {
+            Session::notify('success', 'আপনি আগে থেকেই Subscribed। স্বাগতম!');
+            return $this->redirect($this->safeNext((string) Session::get('_next', '')) ?: '/app');
+        }
+
+        $subscriptionId = $service->startPending($userId, $subscriberRef);
+        $result         = $this->chargeFirstPeriod($subscriptionId, $subscriberRef, $service, $subRepo);
+
+        if ($result !== 'success') {
+            Session::notify('error', 'ব্যালেন্স কম মনে হচ্ছে। Recharge করে আবার চেষ্টা করুন।');
+            return $this->redirect('/expired');
+        }
+
+        Session::notify('success', 'স্বাগতম! আপনার Subscription চালু হয়েছে।');
+
+        return $this->redirect($this->safeNext((string) Session::get('_next', '')) ?: '/app');
+    }
+
+    private function chargeFirstPeriod(
+        int $subscriptionId,
+        string $subscriberRef,
+        SubscriptionService $service,
+        SubscriptionRepo $repo,
+    ): string {
+        $amount = (float) config('bdapps.amount', 2.78);
+        $key    = sha1($subscriptionId . ':' . date('Y-m-d'));
+
+        if (!$repo->claimCharge($subscriptionId, $key, $amount)) {
+            // Already attempted today — trust whatever that attempt concluded.
+            return SubscriptionService::hasAccess((int) $repo->userIdFor($subscriptionId)) ? 'success' : 'failed';
+        }
+
+        try {
+            $charge = \App\Services\GatewayFactory::make()->charge($subscriberRef, $key, $amount);
+        } catch (\Throwable $e) {
+            \App\Core\Logger::warning('charge.first.transport_error', ['error' => $e->getMessage()]);
+            $repo->settleCharge($key, 'failed', null, 'TRANSPORT', [], $e->getMessage());
+            return 'failed';
+        }
+
+        $repo->settleCharge(
+            $key,
+            $charge['status'] === 'success' ? 'success' : ($charge['status'] === 'pending' ? 'pending' : 'failed'),
+            $charge['txn_id'],
+            $charge['code'],
+            $charge['raw'],
+            $charge['status'] === 'success' ? null : (string) ($charge['code'] ?? 'failed')
         );
-        $stmt->execute([
-            'id' => Db::uuid(),
-            'mobile' => $mobile,
-            'hash' => Crypto::hash($otp),
-            'expires' => date('Y-m-d H:i:s', time() + $this->config['otp']['ttl']),
+
+        if ($charge['status'] === 'success') {
+            $service->activate($subscriptionId);
+            return 'success';
+        }
+
+        AuditService::log('charge.first_failed', 'gateway', null, 'subscription', $subscriptionId, [
+            'code' => $charge['code'],
         ]);
 
-        // No live BDApps SDP/OTP SMS contract yet (known blocker) — log instead of sending.
-        error_log("[OTP] {$mobile} => {$otp} (dev/mock delivery, TTL {$this->config['otp']['ttl']}s)");
-
-        if ($request->wantsJson()) {
-            Response::json([
-                'success' => true,
-                'ttl' => $this->config['otp']['ttl'],
-                'resend_cooldown' => $this->config['otp']['resend_cooldown'],
-                'debug_otp' => $this->config['app']['debug'] ? $otp : null,
-            ]);
-            return;
-        }
-
-        $redirect = '/subscribe?mobile=' . urlencode($mobile);
-        if ($this->config['app']['debug']) {
-            $redirect .= '&debug_otp=' . urlencode($otp);
-        }
-        Response::redirect($redirect);
+        return 'failed';
     }
 
-    public function verifyOtp(Request $request): void
+    /** Only same-site absolute paths may be used as a post-login redirect. */
+    private function safeNext(string $next): string
     {
-        $mobile = trim((string) $request->input('mobile_number'));
-        $otp = trim((string) $request->input('otp'));
-
-        $stmt = Db::pdo()->prepare(
-            'SELECT * FROM otp_requests WHERE mobile_number = :mobile AND verified_at IS NULL
-             ORDER BY created_at DESC LIMIT 1'
-        );
-        $stmt->execute(['mobile' => $mobile]);
-        $otpRequest = $stmt->fetch();
-
-        $fail = function (string $code) use ($request, $mobile) {
-            if ($request->wantsJson()) {
-                Response::json(['success' => false, 'error' => authErrorMessage($code)], 422);
-                return;
-            }
-            Response::redirect('/subscribe?mobile=' . urlencode($mobile) . '&error=' . $code);
-        };
-
-        if (!$otpRequest || strtotime($otpRequest['expires_at']) < time()) {
-            $fail('expired');
-            return;
+        if ($next === '' || !str_starts_with($next, '/') || str_starts_with($next, '//')) {
+            return '';
         }
-
-        if ((int) $otpRequest['attempts'] >= $this->config['otp']['max_attempts']) {
-            $fail('too_many_attempts');
-            return;
-        }
-
-        if (!Crypto::verify($otp, $otpRequest['otp_hash'])) {
-            Db::pdo()->prepare('UPDATE otp_requests SET attempts = attempts + 1 WHERE id = :id')
-                ->execute(['id' => $otpRequest['id']]);
-            $fail('wrong_otp');
-            return;
-        }
-
-        Db::pdo()->prepare('UPDATE otp_requests SET verified_at = NOW() WHERE id = :id')
-            ->execute(['id' => $otpRequest['id']]);
-
-        $operator = Validator::operatorForMobile($mobile) ?? 'robi';
-        $user = User::findByMobile($mobile) ?? User::create($mobile, $operator);
-
-        // Already subscribed and active → straight to dashboard, no duplicate charge (§8).
-        $existing = Subscription::activeFor($user['id']);
-        if ($existing) {
-            Session::login($user['id']);
-            Response::redirect('/dashboard');
-            return;
-        }
-
-        $gateway = $this->gateway();
-        $result = $gateway->subscribe($mobile, $this->config['subscription']['daily_amount']);
-
-        if (!$result['success']) {
-            Response::redirect('/subscribe?error=subscribe_failed');
-            return;
-        }
-
-        $subscription = Subscription::create(
-            $user['id'],
-            $gateway->name(),
-            $result['external_ref'],
-            $this->config['subscription']['daily_amount']
-        );
-        Subscription::logEvent($subscription['id'], 'charge_success', $result);
-
-        Session::login($user['id']);
-        Response::redirect('/dashboard');
-    }
-
-    public function gatewayCallback(Request $request): void
-    {
-        // BDApps signs callbacks with BDAPPS_CALLBACK_SECRET — verify before trusting payload.
-        if ($this->config['subscription']['gateway'] === 'bdapps') {
-            $signature = $request->query('signature', '');
-            $expected = hash_hmac('sha256', (string) $request->query('payload', ''), $this->config['subscription']['bdapps']['callback_secret']);
-            if (!hash_equals($expected, (string) $signature)) {
-                Response::json(['error' => 'invalid signature'], 403);
-                return;
-            }
-        }
-        Response::json(['received' => true]);
-    }
-
-    public function logout(Request $request): void
-    {
-        Session::logout();
-        Response::redirect('/');
-    }
-
-    private function gateway(): SubscriptionGateway
-    {
-        return match ($this->config['subscription']['gateway']) {
-            'bdapps' => new BdAppsGateway($this->config['subscription']['bdapps']),
-            default => new MockGateway(),
-        };
+        return preg_match('#^/[A-Za-z0-9/_\-]{0,140}$#', $next) === 1 ? $next : '';
     }
 }

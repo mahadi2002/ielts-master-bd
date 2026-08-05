@@ -1,29 +1,26 @@
 <?php
-
 declare(strict_types=1);
 
 namespace App\Controllers;
 
+use App\Core\Controller;
 use App\Core\Request;
 use App\Core\Response;
-use App\Core\Session;
-use App\Core\View;
-use App\Models\UserCollection;
+use App\Repositories\CollectionRepo;
 
-final class CollectionController
+final class CollectionController extends Controller
 {
-    public function index(Request $request): void
+    public function index(Request $request): Response
     {
-        $userId = (string) Session::userId();
-        $words = UserCollection::forUser($userId);
+        $words = (new CollectionRepo())->forUser((int) $this->currentUserId());
 
         foreach ($words as &$word) {
             if ($word['synonyms']) {
-                $word['synonyms'] = json_decode($word['synonyms'], true);
+                $word['synonyms'] = json_decode((string) $word['synonyms'], true);
             }
         }
         unset($word);
 
-        Response::html(View::render('collection/index', ['words' => $words]));
+        return $this->view('app/collection', ['title' => 'My Collection', 'words' => $words]);
     }
 }

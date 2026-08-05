@@ -1,10 +1,7 @@
 User-agent: *
 Allow: /
+Disallow: /app
+Disallow: /account
 Disallow: /admin
-Disallow: /dashboard
-Disallow: /learn
-Disallow: /review
-Disallow: /quiz
-Disallow: /collection
 
-Sitemap: /sitemap.php
+Sitemap: /sitemap.xml

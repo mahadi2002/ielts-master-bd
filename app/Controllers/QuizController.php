@@ -1,67 +1,67 @@
 <?php
-
 declare(strict_types=1);
 
 namespace App\Controllers;
 
+use App\Core\Controller;
 use App\Core\Request;
 use App\Core\Response;
-use App\Core\Session;
-use App\Core\View;
-use App\Models\Quiz;
-use App\Models\QuizAttempt;
-use App\Services\ExclusiveWordService;
+use App\Repositories\QuizAttemptRepo;
+use App\Repositories\QuizRepo;
 use App\Services\GoalService;
-use App\Services\StreakService;
 
-final class QuizController
+final class QuizController extends Controller
 {
-    public function index(Request $request): void
-    {
-        $userId = (string) Session::userId();
-        $quizzes = Quiz::randomSetForUser($userId, 10);
+    public function __construct(
+        private QuizRepo $quizzes = new QuizRepo(),
+        private QuizAttemptRepo $attempts = new QuizAttemptRepo(),
+    ) {
+    }
 
-        foreach ($quizzes as &$quiz) {
+    public function index(Request $request): Response
+    {
+        $userId  = (int) $this->currentUserId();
+        $quizSet = $this->quizzes->randomSetForUser($userId, 10);
+
+        foreach ($quizSet as &$quiz) {
             if ($quiz['options']) {
-                $quiz['options'] = json_decode($quiz['options'], true);
+                $quiz['options'] = json_decode((string) $quiz['options'], true);
             }
         }
         unset($quiz);
 
-        Response::html(View::render('quiz/index', ['quizzes' => $quizzes]));
+        return $this->view('app/quiz', ['title' => 'Quiz', 'quizzes' => $quizSet]);
     }
 
-    public function submit(Request $request): void
+    public function submit(Request $request): Response
     {
-        $userId = (string) Session::userId();
-        $quizId = (string) $request->input('quiz_id');
-        $answer = (string) $request->input('answer');
+        $userId = (int) $this->currentUserId();
+        $quizId = $request->int('quiz_id');
+        $answer = $request->str('answer');
 
-        $quiz = Quiz::find($quizId);
-        if (!$quiz) {
-            Response::json(['error' => 'পাওয়া যায়নি।'], 404);
-            return;
+        $quiz = $this->quizzes->find($quizId);
+        if ($quiz === null) {
+            return $this->json(['error' => 'পাওয়া যায়নি।'], 404);
         }
 
-        $isCorrect = mb_strtolower(trim($answer)) === mb_strtolower(trim($quiz['correct_answer']));
-        QuizAttempt::record($userId, $quizId, $isCorrect);
+        $isCorrect = mb_strtolower($answer) === mb_strtolower((string) $quiz['correct_answer']);
+        $this->attempts->record($userId, $quizId, $isCorrect);
 
         $justCompleted = false;
-        $unlockedWord = null;
+        $unlockedWord  = null;
 
         if ($isCorrect) {
-            $goalService = new GoalService(new ExclusiveWordService(), new StreakService());
-            $result = $goalService->increment($userId);
+            $result        = (new GoalService())->increment($userId);
             $justCompleted = $result['justCompleted'];
-            $unlockedWord = $result['unlockedWord'];
+            $unlockedWord  = $result['unlockedWord'];
         }
 
-        Response::json([
-            'success' => true,
-            'correct' => $isCorrect,
+        return $this->json([
+            'success'       => true,
+            'correct'       => $isCorrect,
             'correctAnswer' => $quiz['correct_answer'],
             'justCompleted' => $justCompleted,
-            'unlockedWord' => $unlockedWord,
+            'unlockedWord'  => $unlockedWord,
         ]);
     }
 }

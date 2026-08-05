@@ -1,44 +1,40 @@
 <?php
-
 declare(strict_types=1);
 
 namespace App\Controllers;
 
+use App\Core\Controller;
 use App\Core\Request;
 use App\Core\Response;
-use App\Core\Session;
-use App\Core\View;
-use App\Models\UserWordProgress;
+use App\Repositories\ProgressRepo;
 use App\Services\SpacedRepetitionService;
 
-final class ReviewController
+final class ReviewController extends Controller
 {
-    public function queue(Request $request): void
+    public function __construct(private ProgressRepo $repo = new ProgressRepo())
     {
-        $userId = (string) Session::userId();
-        $words = UserWordProgress::dueForReview($userId);
-
-        Response::html(View::render('review/queue', ['words' => $words]));
     }
 
-    public function submitAnswer(Request $request): void
+    public function queue(Request $request): Response
     {
-        $userId = (string) Session::userId();
-        $progressId = (string) $request->input('progress_id');
-        $rating = (string) $request->input('rating'); // again|hard|good|easy
+        $words = $this->repo->dueForReview((int) $this->currentUserId());
 
-        $stmt = \App\Core\Db::pdo()->prepare('SELECT * FROM user_word_progress WHERE id = :id AND user_id = :u');
-        $stmt->execute(['id' => $progressId, 'u' => $userId]);
-        $progress = $stmt->fetch();
+        return $this->view('app/review', ['title' => 'Review Queue', 'words' => $words]);
+    }
 
-        if (!$progress) {
-            Response::json(['error' => 'পাওয়া যায়নি।'], 404);
-            return;
+    public function answer(Request $request): Response
+    {
+        $userId     = (int) $this->currentUserId();
+        $progressId = $request->int('progress_id');
+        $rating     = $request->str('rating'); // again|hard|good|easy
+
+        $progress = $this->repo->findById($progressId, $userId);
+        if ($progress === null) {
+            return $this->json(['error' => 'পাওয়া যায়নি।'], 404);
         }
 
-        $srs = new SpacedRepetitionService();
-        $updated = $srs->submitAnswer($progress, $rating);
+        $updated = (new SpacedRepetitionService($this->repo))->submitAnswer($progress, $rating);
 
-        Response::json(['success' => true, 'srs' => $updated]);
+        return $this->json(['success' => true, 'srs' => $updated]);
     }
 }

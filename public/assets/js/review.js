@@ -14,7 +14,7 @@
         item.querySelectorAll('.rating-btn').forEach(function (b) { b.disabled = true; });
         btn.classList.add('is-selected');
 
-        window.IMBD.post('/review/answer', { progress_id: progressId, rating: rating }).then(function () {
+        window.IMBD.post('/app/review/answer', { progress_id: progressId, rating: rating }).then(function () {
           items[idx].classList.remove('is-active');
           idx++;
           if (items[idx]) {

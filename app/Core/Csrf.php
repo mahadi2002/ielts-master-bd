@@ -1,50 +1,30 @@
 <?php
-
 declare(strict_types=1);
 
 namespace App\Core;
 
-/**
- * Double-submit-cookie CSRF, not session-stored: sessions.user_id is NOT NULL
- * in the schema (server-side revocation is keyed to authenticated users only),
- * so DbSessionHandler never persists anonymous sessions — a session-stored
- * token would silently fail CSRF on every logged-out form (e.g. /subscribe).
- */
 final class Csrf
 {
-    private const COOKIE_NAME = 'imbd_csrf';
-    private static bool $secure = false;
-
-    public static function boot(array $config): void
-    {
-        self::$secure = (bool) $config['session']['secure'];
-    }
-
     public static function token(): string
     {
-        if (!empty($_COOKIE[self::COOKIE_NAME])) {
-            return $_COOKIE[self::COOKIE_NAME];
+        if (empty($_SESSION['_token'])) {
+            $_SESSION['_token'] = Crypto::randomToken(32);
         }
-
-        $token = bin2hex(random_bytes(32));
-        setcookie(self::COOKIE_NAME, $token, [
-            'expires' => time() + 86400,
-            'path' => '/',
-            'httponly' => false,
-            'secure' => self::$secure,
-            'samesite' => 'Lax',
-        ]);
-        $_COOKIE[self::COOKIE_NAME] = $token;
-
-        return $token;
+        return (string) $_SESSION['_token'];
     }
 
-    public static function verify(?string $token): bool
+    public static function check(?string $candidate): bool
     {
-        $cookie = $_COOKIE[self::COOKIE_NAME] ?? null;
-        if (empty($cookie) || empty($token)) {
+        $expected = $_SESSION['_token'] ?? null;
+        if (!is_string($expected) || !is_string($candidate) || $candidate === '') {
             return false;
         }
-        return hash_equals($cookie, $token);
+        return hash_equals($expected, $candidate);
+    }
+
+    /** Issue a fresh token — called after a mismatch so the retry can succeed. */
+    public static function rotate(): void
+    {
+        $_SESSION['_token'] = Crypto::randomToken(32);
     }
 }

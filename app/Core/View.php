@@ -1,45 +1,77 @@
 <?php
-
 declare(strict_types=1);
 
 namespace App\Core;
 
+use RuntimeException;
+
+/**
+ * Plain-PHP views. A template may declare its layout with:
+ *   <?php $this->layout('layouts/app', ['title' => '…']); ?>
+ * and the rendered template body is available to the layout as $content.
+ */
 final class View
 {
-    private static ?array $config = null;
+    private static array $shared = [];
+    private ?string $layout = null;
+    private array $layoutData = [];
 
-    public static function boot(array $config): void
+    public static function share(string $key, mixed $value): void
     {
-        self::$config = $config;
+        self::$shared[$key] = $value;
     }
 
-    public static function render(string $template, array $data = [], ?string $layout = 'layout'): string
+    public static function render(string $template, array $data = []): string
     {
-        $data['config'] = self::$config;
-        $data['auth'] = Session::user();
-        $data['csrfToken'] = Csrf::token();
-        $data['flash'] = Session::flash('message');
-        $data['flashType'] = Session::flash('message_type') ?? 'info';
-        $data['streakCount'] = $data['auth'] ? (\App\Models\Streak::forUser($data['auth']['id'])['current_streak'] ?? 0) : 0;
-
-        $content = self::capture(BASE_PATH . '/app/Views/' . $template . '.php', $data);
-
-        if ($layout === null) {
-            return $content;
-        }
-
-        $data['content'] = $content;
-        return self::capture(BASE_PATH . '/app/Views/' . $layout . '.php', $data);
+        return (new self())->run($template, $data);
     }
 
-    private static function capture(string $path, array $data): string
+    private function run(string $template, array $data): string
     {
-        if (!is_file($path)) {
-            throw new \RuntimeException("View not found: {$path}");
+        $file = APP_ROOT . '/views/' . trim($template, '/') . '.php';
+        if (!is_file($file)) {
+            throw new RuntimeException('View not found: ' . $template);
         }
-        extract($data, EXTR_SKIP);
+
+        $data = array_merge(self::$shared, $data);
+
         ob_start();
-        include $path;
+        (function (string $__file, array $__data): void {
+            extract($__data, EXTR_SKIP);
+            require $__file;
+        })->call($this, $file, $data);
+        $content = (string) ob_get_clean();
+
+        if ($this->layout !== null) {
+            $layout = $this->layout;
+            $this->layout = null;
+            $content = self::render($layout, array_merge($data, $this->layoutData, ['content' => $content]));
+        }
+
+        return $content;
+    }
+
+    /** Called from inside a template. */
+    private function layout(string $name, array $data = []): void
+    {
+        $this->layout     = $name;
+        $this->layoutData = $data;
+    }
+
+    /** Include a partial from inside a template or layout. */
+    public static function partial(string $template, array $data = []): string
+    {
+        $file = APP_ROOT . '/views/' . trim($template, '/') . '.php';
+        if (!is_file($file)) {
+            throw new RuntimeException('Partial not found: ' . $template);
+        }
+
+        ob_start();
+        (static function (string $__file, array $__data): void {
+            extract($__data, EXTR_SKIP);
+            require $__file;
+        })($file, array_merge(self::$shared, $data));
+
         return (string) ob_get_clean();
     }
 }

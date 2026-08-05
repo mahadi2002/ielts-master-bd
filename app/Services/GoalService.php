@@ -1,45 +1,51 @@
 <?php
-
 declare(strict_types=1);
 
 namespace App\Services;
 
-use App\Models\DailyProgress;
+use App\Repositories\DailyProgressRepo;
+use App\Repositories\UserRepo;
 
 final class GoalService
 {
     public function __construct(
-        private ExclusiveWordService $exclusiveWordService,
-        private StreakService $streakService,
+        private ExclusiveWordService $exclusiveWordService = new ExclusiveWordService(),
+        private StreakService $streakService = new StreakService(),
+        private DailyProgressRepo $progressRepo = new DailyProgressRepo(),
+        private UserRepo $userRepo = new UserRepo(),
     ) {
     }
 
     /**
-     * Registers one unit of daily-goal progress (a learned word or a correct quiz answer).
+     * Registers one unit of daily-goal progress (a learned word or a correct
+     * quiz answer).
      * @return array{progress: array, justCompleted: bool, unlockedWord: ?array}
      */
-    public function increment(string $userId): array
+    public function increment(int $userId): array
     {
-        $progress = DailyProgress::today($userId);
+        $user   = $this->userRepo->find($userId);
+        $target = (int) ($user['daily_goal_count'] ?? 5);
 
-        if ($progress['goal_completed']) {
+        $progress = $this->progressRepo->today($userId, $target);
+
+        if ((bool) $progress['goal_completed']) {
             return ['progress' => $progress, 'justCompleted' => false, 'unlockedWord' => null];
         }
 
-        $progress = DailyProgress::increment($progress['id']);
+        $progress = $this->progressRepo->increment((int) $progress['id']);
 
         $justCompleted = false;
-        $unlockedWord = null;
+        $unlockedWord  = null;
 
-        if (!$progress['goal_completed'] && (int) $progress['goal_achieved'] >= (int) $progress['goal_target']) {
+        if (!(bool) $progress['goal_completed'] && (int) $progress['goal_achieved'] >= (int) $progress['goal_target']) {
             $unlockedWord = $this->exclusiveWordService->unlock($userId);
-            if ($unlockedWord) {
-                DailyProgress::markCompleted($progress['id'], $unlockedWord['id']);
+            if ($unlockedWord !== null) {
+                $this->progressRepo->markCompleted((int) $progress['id'], (int) $unlockedWord['id']);
             }
             $this->streakService->onGoalCompleted($userId);
             $justCompleted = true;
 
-            $progress = DailyProgress::today($userId);
+            $progress = $this->progressRepo->today($userId, $target);
         }
 
         return ['progress' => $progress, 'justCompleted' => $justCompleted, 'unlockedWord' => $unlockedWord];

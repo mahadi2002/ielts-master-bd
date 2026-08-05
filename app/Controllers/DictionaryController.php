@@ -1,15 +1,14 @@
 <?php
-
 declare(strict_types=1);
 
 namespace App\Controllers;
 
+use App\Core\Controller;
 use App\Core\Request;
 use App\Core\Response;
-use App\Core\View;
 use App\Services\DictionaryService;
 
-final class DictionaryController
+final class DictionaryController extends Controller
 {
     private DictionaryService $service;
 
@@ -18,32 +17,33 @@ final class DictionaryController
         $this->service = new DictionaryService();
     }
 
-    public function search(Request $request): void
+    public function index(Request $request): Response
     {
-        $query = trim((string) $request->query('q', ''));
-        $results = $query !== '' ? $this->service->search($query) : [];
+        $query   = $request->str('q');
+        $results = $this->service->search($query);
 
-        Response::html(View::render('dictionary/search', [
-            'query' => $query,
+        return $this->view('dictionary/index', [
+            'title'   => 'Dictionary Search',
+            'query'   => $query,
             'results' => $results,
-            'rateLimited' => false,
-        ]));
+        ]);
     }
 
-    public function show(Request $request): void
+    public function show(Request $request, string $slug): Response
     {
-        $headword = (string) $request->param('word');
-        $word = $this->service->show($headword);
+        $word = $this->service->show($slug);
 
         if ($word === null) {
-            Response::notFound();
-            return;
+            $this->notFound();
         }
 
         if ($word['synonyms']) {
-            $word['synonyms'] = json_decode($word['synonyms'], true);
+            $word['synonyms'] = json_decode((string) $word['synonyms'], true);
         }
 
-        Response::html(View::render('dictionary/word', ['word' => $word]));
+        return $this->view('dictionary/show', [
+            'title' => $word['headword'],
+            'word'  => $word,
+        ]);
     }
 }

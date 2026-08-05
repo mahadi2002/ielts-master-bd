@@ -1,85 +1,152 @@
 <?php
-
 declare(strict_types=1);
 
 namespace App\Core;
 
 /**
- * Rule-based validator with Bangla error messages.
- * Usage: (new Validator($data, ['field' => 'required|max:100']))->fails()
+ * Rule-based validation with Bangla messages.
+ *
+ *   $v = Validator::make($request->body, [
+ *       'msisdn' => 'required|msisdn',
+ *       'title'  => 'required|min:8|max:200',
+ *   ], ['msisdn' => 'মোবাইল নম্বর']);
+ *
+ * Raw $_POST / $_GET is never used without passing through here.
  */
 final class Validator
 {
-    private array $data;
-    private array $rules;
     private array $errors = [];
+    private array $clean  = [];
 
-    public function __construct(array $data, array $rules)
+    private function __construct(
+        private array $data,
+        private array $rules,
+        private array $labels,
+    ) {
+    }
+
+    public static function make(array $data, array $rules, array $labels = []): self
     {
-        $this->data = $data;
-        $this->rules = $rules;
-        $this->run();
+        $v = new self($data, $rules, $labels);
+        $v->run();
+        return $v;
+    }
+
+    private function label(string $field): string
+    {
+        return $this->labels[$field] ?? $field;
     }
 
     private function run(): void
     {
         foreach ($this->rules as $field => $ruleString) {
+            $raw   = $this->data[$field] ?? null;
+            $value = is_string($raw) ? trim($raw) : $raw;
             $rules = explode('|', $ruleString);
-            $value = $this->data[$field] ?? null;
+
+            $required = in_array('required', $rules, true);
+            $isEmpty  = $value === null || $value === '' || $value === [];
+
+            if ($isEmpty) {
+                if ($required) {
+                    $this->fail($field, $this->label($field) . ' দিতে হবে।');
+                } else {
+                    $this->clean[$field] = $value;
+                }
+                continue;
+            }
 
             foreach ($rules as $rule) {
-                [$name, $param] = array_pad(explode(':', $rule, 2), 2, null);
-                $this->applyRule($field, $value, $name, $param);
+                if ($rule === 'required' || $rule === '') {
+                    continue;
+                }
+
+                $arg = null;
+                if (str_contains($rule, ':')) {
+                    [$rule, $arg] = explode(':', $rule, 2);
+                }
+
+                if (!$this->apply($field, (string) $rule, $arg, $value)) {
+                    continue 2;
+                }
             }
+
+            $this->clean[$field] = $value;
         }
     }
 
-    private function applyRule(string $field, mixed $value, string $name, ?string $param): void
+    private function apply(string $field, string $rule, ?string $arg, mixed $value): bool
     {
-        switch ($name) {
-            case 'required':
-                if ($value === null || $value === '') {
-                    $this->addError($field, 'এই ফিল্ডটি আবশ্যক');
-                }
-                break;
-            case 'numeric':
-                if ($value !== null && $value !== '' && !is_numeric($value)) {
-                    $this->addError($field, 'শুধুমাত্র সংখ্যা লিখুন');
-                }
-                break;
-            case 'max':
-                if ($value !== null && mb_strlen((string) $value) > (int) $param) {
-                    $this->addError($field, "সর্বোচ্চ {$param} অক্ষর অনুমোদিত");
-                }
-                break;
-            case 'min':
-                if ($value !== null && $value !== '' && mb_strlen((string) $value) < (int) $param) {
-                    $this->addError($field, "সর্বনিম্ন {$param} অক্ষর প্রয়োজন");
-                }
-                break;
-            case 'regex':
-                if ($value !== null && $value !== '' && !preg_match($param, (string) $value)) {
-                    $this->addError($field, 'সঠিক ফরম্যাটে দিন');
-                }
-                break;
-            case 'in':
-                $allowed = explode(',', (string) $param);
-                if ($value !== null && $value !== '' && !in_array((string) $value, $allowed, true)) {
-                    $this->addError($field, 'অবৈধ মান');
-                }
-                break;
-        }
+        $label = $this->label($field);
+        $str   = is_scalar($value) ? (string) $value : '';
+
+        return match ($rule) {
+            'msisdn' => preg_match('/^01[0-9]{9}$/', $str) === 1
+                ?: $this->fail($field, '১১ সংখ্যার সঠিক মোবাইল নম্বর দিন (01XXXXXXXXX)।'),
+
+            'digits' => preg_match('/^[0-9]{' . (int) $arg . '}$/', $str) === 1
+                ?: $this->fail($field, $label . ' ' . bn_num((int) $arg) . ' সংখ্যার হতে হবে।'),
+
+            'int' => preg_match('/^-?[0-9]{1,15}$/', $str) === 1
+                ?: $this->fail($field, $label . ' একটি সংখ্যা হতে হবে।'),
+
+            'numeric' => is_numeric($str)
+                ?: $this->fail($field, $label . ' একটি সংখ্যা হতে হবে।'),
+
+            'min' => mb_strlen($str, 'UTF-8') >= (int) $arg
+                ?: $this->fail($field, $label . ' কমপক্ষে ' . bn_num((int) $arg) . ' অক্ষরের হতে হবে।'),
+
+            'max' => mb_strlen($str, 'UTF-8') <= (int) $arg
+                ?: $this->fail($field, $label . ' সর্বোচ্চ ' . bn_num((int) $arg) . ' অক্ষরের হতে পারে।'),
+
+            'between' => $this->between($field, $label, (string) $arg, $str),
+
+            'email' => filter_var($str, FILTER_VALIDATE_EMAIL) !== false
+                ?: $this->fail($field, 'সঠিক Email দিন।'),
+
+            'date' => strtotime($str) !== false
+                ?: $this->fail($field, $label . ' একটি সঠিক তারিখ হতে হবে।'),
+
+            'in' => in_array($str, explode(',', (string) $arg), true)
+                ?: $this->fail($field, $label . ' সঠিক নয়।'),
+
+            'slug' => preg_match('/^[a-z0-9\-]{1,140}$/', $str) === 1
+                ?: $this->fail($field, $label . ' সঠিক নয়।'),
+
+            'array' => is_array($value)
+                ?: $this->fail($field, $label . ' সঠিক নয়।'),
+
+            default => true,
+        };
     }
 
-    private function addError(string $field, string $message): void
+    private function between(string $field, string $label, string $arg, string $str): bool
     {
-        $this->errors[$field] ??= [];
+        [$min, $max] = array_pad(explode(',', $arg), 2, '0');
+        $n = (float) $str;
+        if ($n < (float) $min || $n > (float) $max) {
+            return $this->fail(
+                $field,
+                $label . ' ' . bn_num($min) . ' থেকে ' . bn_num($max) . '-এর মধ্যে হতে হবে।'
+            );
+        }
+        return true;
+    }
+
+    private function fail(string $field, string $message): bool
+    {
         $this->errors[$field][] = $message;
+        return false;
     }
 
     public function fails(): bool
     {
-        return count($this->errors) > 0;
+        return $this->errors !== [];
+    }
+
+    public function passes(): bool
+    {
+        return $this->errors === [];
     }
 
     public function errors(): array
@@ -87,27 +154,29 @@ final class Validator
         return $this->errors;
     }
 
-    public function firstError(string $field): ?string
+    public function firstError(): ?string
     {
-        return $this->errors[$field][0] ?? null;
-    }
-
-    /**
-     * Bangladeshi mobile number: 11 digits, Robi (016/019) or Airtel (017) prefix only.
-     * @return string|null 'robi', 'airtel', or null if invalid
-     */
-    public static function operatorForMobile(string $mobile): ?string
-    {
-        if (!preg_match('/^01[0-9]{9}$/', $mobile)) {
-            return null;
-        }
-        $prefix = substr($mobile, 0, 3);
-        if (in_array($prefix, ['016', '019'], true)) {
-            return 'robi';
-        }
-        if ($prefix === '017') {
-            return 'airtel';
+        foreach ($this->errors as $messages) {
+            return (string) $messages[0];
         }
         return null;
+    }
+
+    /** Only fields that had a rule and passed it. */
+    public function validated(): array
+    {
+        return $this->clean;
+    }
+
+    public function get(string $field, mixed $default = null): mixed
+    {
+        return $this->clean[$field] ?? $default;
+    }
+
+    /** Flash errors + old input so the form can be re-rendered populated. */
+    public function flash(array $exceptKeys = ['_token', 'password']): void
+    {
+        Session::flash('_errors', $this->errors);
+        Session::flash('_old', array_diff_key($this->data, array_flip($exceptKeys)));
     }
 }
